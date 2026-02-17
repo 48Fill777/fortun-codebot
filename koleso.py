@@ -1,15 +1,13 @@
 import os
 import telebot
 from telebot import types
-import openpyxl
-from openpyxl import Workbook, load_workbook
 from datetime import datetime
 import json
 import time
 import re
-from telebot.apihelper import ApiTelegramException  # <-- ДОБАВЛЕНО
+import csv
+from telebot.apihelper import ApiTelegramException
 
-        
 # ====== СЕКРЕТНЫЕ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ======
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
@@ -32,32 +30,16 @@ WEB_APP_URL = "https://48fill777.github.io/wheel-of-fortune/"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-@bot.message_handler(commands=['testexcel'])
-def test_excel(message):
-    try:
-        from openpyxl import Workbook
-        wb = Workbook()
-        ws = wb.active
-        ws['A1'] = 'Привет мир'
-        ws['A2'] = 'Клиент: Тест Тестов'
-        wb.save('test.xlsx')
-        bot.reply_to(message, "Файл test.xlsx создан")
-    except Exception as e:
-        bot.reply_to(message, f"Ошибка: {e}")
-        
-# Функция безопасной отправки сообщений (обрабатывает блокировку бота)
+# ====== Функция безопасной отправки сообщений ======
 def safe_send_message(chat_id, text, **kwargs):
     try:
         bot.send_message(chat_id, text, **kwargs)
     except ApiTelegramException as e:
         if e.error_code == 403:
-            # Пользователь заблокировал бота — просто игнорируем
             print(f"⚠️ Пользователь {chat_id} заблокировал бота, сообщение не отправлено")
         else:
-            # Другие ошибки API (например, слишком много запросов) — логируем и не прерываем работу
             print(f"⚠️ Ошибка Telegram API при отправке {chat_id}: {e}")
     except Exception as e:
-        # Непредвиденная ошибка — пробрасываем дальше, чтобы внешний цикл перезапустил бота
         print(f"❌ Критическая ошибка при отправке {chat_id}: {e}")
         raise
 
@@ -65,57 +47,75 @@ def safe_send_message(chat_id, text, **kwargs):
 bot.remove_webhook()
 time.sleep(1)
 
-EXCEL_FILE = 'clients_data.xlsx'
+# ====== РАБОТА С CSV-ФАЙЛОМ ======
+CSV_FILE = 'clients_data.csv'
+CSV_HEADERS = ["telegram_id", "username", "full_name", "phone", "prize", "win_date", "is_used"]
 
-# Инициализация Excel
-def init_excel():
-    if not os.path.exists(EXCEL_FILE):
-        wb = Workbook()
-        ws_clients = wb.active
-        ws_clients.title = "Клиенты"
-        headers = ["telegram_id", "username", "full_name", "phone", "prize", "win_date", "is_used"]
-        ws_clients.append(headers)
-        wb.save(EXCEL_FILE)
+def init_csv():
+    """Создаёт CSV-файл с заголовками, если его нет."""
+    try:
+        with open(CSV_FILE, 'x', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(CSV_HEADERS)
+    except FileExistsError:
+        pass
 
-init_excel()
+init_csv()
 
 def has_user_spun(telegram_id):
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb["Клиенты"]
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if row[0] is not None and int(row[0]) == telegram_id:
-            return True
+    """Проверяет, участвовал ли пользователь."""
+    with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row['telegram_id'] and int(row['telegram_id']) == telegram_id:
+                return True
     return False
 
 def add_spin_record(telegram_id, username, full_name, prize):
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb["Клиенты"]
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if row[0] is not None and int(row[0]) == telegram_id:
-            return False
-    ws.append([telegram_id, username, full_name, "", prize, datetime.now().isoformat(), 0])
-    wb.save(EXCEL_FILE)
+    """Добавляет запись о выигрыше, если её ещё нет."""
+    if has_user_spun(telegram_id):
+        return False
+    with open(CSV_FILE, 'a', encoding='utf-8-sig', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([telegram_id, username, full_name, "", prize, datetime.now().isoformat(), 0])
     return True
 
 def update_phone(telegram_id, phone):
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb["Клиенты"]
-    for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
-        cell_value = row[0].value
-        if cell_value is not None and int(cell_value) == telegram_id:
-            ws.cell(row=i, column=4).value = phone
-            wb.save(EXCEL_FILE)
-            return True
-    return False
+    """Обновляет номер телефона для пользователя."""
+    rows = []
+    updated = False
+    with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
+        reader = csv.reader(f)
+        headers = next(reader)
+        for row in reader:
+            if row and int(row[0]) == telegram_id:
+                row[3] = phone
+                updated = True
+            rows.append(row)
+    if updated:
+        with open(CSV_FILE, 'w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(rows)
+    return updated
 
 def get_user_record(telegram_id):
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb["Клиенты"]
-    for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        if row[0] is not None and int(row[0]) == telegram_id:
-            return i, row
+    """Возвращает (номер_строки, список) для пользователя или (None, None)."""
+    with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
+        reader = csv.reader(f)
+        headers = next(reader)
+        for i, row in enumerate(reader, start=2):
+            if row and int(row[0]) == telegram_id:
+                return i, row
     return None, None
 
+def get_all_records():
+    """Возвращает список всех записей в виде словарей."""
+    with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
+        reader = csv.DictReader(f)
+        return list(reader)
+
+# ====== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
 def validate_phone(phone):
     phone = re.sub(r'\D', '', phone)
     return len(phone) in (10, 11)
@@ -126,6 +126,18 @@ def format_phone(phone):
         phone = phone[1:]
     return f"+7 ({phone[:3]}) {phone[3:6]}-{phone[6:8]}-{phone[8:]}"
 
+# ====== ТЕСТОВАЯ КОМАНДА ДЛЯ CSV ======
+@bot.message_handler(commands=['testcsv'])
+def test_csv(message):
+    try:
+        with open('test.csv', 'w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Привет мир', 'Клиент: Тест Тестов'])
+        bot.reply_to(message, "✅ Файл test.csv создан")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка: {e}")
+
+# ====== ОСНОВНЫЕ ОБРАБОТЧИКИ ======
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
@@ -133,7 +145,6 @@ def start(message):
     url = WEB_APP_URL + ("?already_spun=1" if spun else "")
     print(f"[DEBUG] /start для {user_id}, spun={spun}")
 
-    # Reply-кнопка для открытия колеса
     markup_reply = types.ReplyKeyboardMarkup(resize_keyboard=True)
     web_app_button = types.KeyboardButton(
         text="🎡 Крутить колесо!",
@@ -141,7 +152,6 @@ def start(message):
     )
     markup_reply.add(web_app_button)
 
-    # Приветственное сообщение
     safe_send_message(
         message.chat.id,
         f"🌟 Добро пожаловать в Студию красоты “KİVİ”! 🌟\n\n"
@@ -159,7 +169,6 @@ def start(message):
         reply_markup=markup_reply
     )
 
-    # Inline-кнопки (контакты, запись, мой выигрыш)
     markup_inline = types.InlineKeyboardMarkup(row_width=2)
     btn_contacts = types.InlineKeyboardButton('📞 Контакты', callback_data='contacts')
     btn_booking = types.InlineKeyboardButton('📅 Записаться онлайн', url=SALON_BOOKING_URL)
@@ -244,7 +253,7 @@ def my_prize_command(message):
     _, record = get_user_record(user_id)
     print(f"[DEBUG] my_prize для {user_id}, record={record}")
     if record:
-        status = "✅ Активирован" if record[6] == 1 else "⏳ Ожидает"
+        status = "✅ Активирован" if record[6] == '1' else "⏳ Ожидает"
         safe_send_message(
             message.chat.id,
             f"🎁 Ваш приз: {record[4]}\nСтатус: {status}"
@@ -270,7 +279,7 @@ def show_contacts(call):
     safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
-# Админ-панель (команда /admin)
+# ====== АДМИН-ПАНЕЛЬ ======
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.from_user.id != ADMIN_ID:
@@ -288,16 +297,10 @@ def admin_panel(message):
 def admin_stats(call):
     if call.from_user.id != ADMIN_ID:
         return
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb["Клиенты"]
-    total = ws.max_row - 1
-    with_phone = 0
-    used = 0
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if row[3]:
-            with_phone += 1
-        if row[6] == 1:
-            used += 1
+    records = get_all_records()
+    total = len(records)
+    with_phone = sum(1 for r in records if r['phone'])
+    used = sum(1 for r in records if r['is_used'] == '1')
     text = f"""
 📊 СТАТИСТИКА
 
@@ -312,14 +315,13 @@ def admin_stats(call):
 def admin_no_phone(call):
     if call.from_user.id != ADMIN_ID:
         return
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb["Клиенты"]
+    records = get_all_records()
     text = "⏳ ОЖИДАЮТ НОМЕР ТЕЛЕФОНА:\n\n"
     found = False
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if not row[3]:
+    for r in records:
+        if not r['phone']:
             found = True
-            text += f"👤 {row[2]} (@{row[1]})\n🆔 {row[0]}\n🎁 {row[4]}\n📅 {row[5][:16]}\n\n"
+            text += f"👤 {r['full_name']} (@{r['username']})\n🆔 {r['telegram_id']}\n🎁 {r['prize']}\n📅 {r['win_date'][:16]}\n\n"
     if not found:
         text = "✅ Все клиенты оставили номер."
     safe_send_message(call.message.chat.id, text)
@@ -329,14 +331,13 @@ def admin_no_phone(call):
 def admin_pending(call):
     if call.from_user.id != ADMIN_ID:
         return
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb["Клиенты"]
+    records = get_all_records()
     text = "⏳ ОЖИДАЮТ СВЯЗИ (есть номер, не обслужены):\n\n"
     found = False
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if row[3] and row[6] == 0:
+    for r in records:
+        if r['phone'] and r['is_used'] == '0':
             found = True
-            text += f"👤 {row[2]} (@{row[1]})\n📞 {row[3]}\n🎁 {row[4]}\n📅 {row[5][:16]}\n\n"
+            text += f"👤 {r['full_name']} (@{r['username']})\n📞 {r['phone']}\n🎁 {r['prize']}\n📅 {r['win_date'][:16]}\n\n"
     if not found:
         text = "✅ Нет ожидающих связи."
     safe_send_message(call.message.chat.id, text)
@@ -346,25 +347,23 @@ def admin_pending(call):
 def admin_all(call):
     if call.from_user.id != ADMIN_ID:
         return
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb["Клиенты"]
+    records = get_all_records()
     text = "📋 ВСЕ КЛИЕНТЫ:\n\n"
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        phone = row[3] if row[3] else "не указан"
-        status = "✅" if row[6] == 1 else "⏳"
-        text += f"{status} {row[2]} (@{row[1]}) 📞 {phone}\n🎁 {row[4]}\n\n"
-    if ws.max_row == 1:
+    for r in records:
+        phone = r['phone'] if r['phone'] else "не указан"
+        status = "✅" if r['is_used'] == '1' else "⏳"
+        text += f"{status} {r['full_name']} (@{r['username']}) 📞 {phone}\n🎁 {r['prize']}\n\n"
+    if not records:
         text = "Пока нет клиентов."
     safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
-# Обработчик для обращений к админу
 @bot.message_handler(commands=['call_admin'])
 def call_admin(message):
     safe_send_message(ADMIN_ID, f"🔔 Клиент {message.from_user.full_name} (@{message.from_user.username}) просит помощи!")
     safe_send_message(message.chat.id, "✅ Запрос отправлен администратору.")
 
-# Запуск бота с авто-перезапуском
+# ====== ЗАПУСК БОТА ======
 if __name__ == '__main__':
     print(f"🚀 Бот для салона '{SALON_NAME}' запущен!")
     print(f"👤 Администратор ID: {ADMIN_ID}")
@@ -377,5 +376,3 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"⚠️ Ошибка: {e}, перезапуск через 5 сек...")
             time.sleep(5)
-
-
