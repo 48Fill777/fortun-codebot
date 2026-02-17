@@ -50,7 +50,7 @@ bot.remove_webhook()
 time.sleep(1)
 
 # ====== РАБОТА С CSV ======
-CSV_FILE = 'clients_data.csv'
+CSV_FILE = 'clients_data.csv'  # Если нужно /app/data/clients_data.csv, замените путь
 CSV_HEADERS = ["telegram_id", "username", "full_name", "phone", "prize", "win_date", "is_used"]
 
 def init_csv():
@@ -274,7 +274,8 @@ def admin_panel(message):
         types.InlineKeyboardButton('📊 Статистика', callback_data='admin_stats'),
         types.InlineKeyboardButton('⏳ Ожидают номера', callback_data='admin_no_phone'),
         types.InlineKeyboardButton('📞 Ожидают связи', callback_data='admin_pending'),
-        types.InlineKeyboardButton('📋 Все клиенты', callback_data='admin_all')
+        types.InlineKeyboardButton('📋 Все клиенты', callback_data='admin_all'),
+        types.InlineKeyboardButton('📥 Экспорт в Excel', callback_data='admin_export')  # новая кнопка
     )
     safe_send_message(message.chat.id, "🔧 АДМИН-ПАНЕЛЬ", reply_markup=markup)
 
@@ -343,34 +344,37 @@ def admin_all(call):
     safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
+# Обработчик для экспорта (кнопка)
+@bot.callback_query_handler(func=lambda call: call.data == 'admin_export')
+def admin_export_callback(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "❌ У вас нет прав администратора", show_alert=True)
+        return
+    bot.answer_callback_query(call.id)  # закрываем "часики"
+    send_export(call.message.chat.id)
+
 # Команда для обращения к админу
 @bot.message_handler(commands=['call_admin'])
 def call_admin(message):
     safe_send_message(ADMIN_ID, f"🔔 Клиент {message.from_user.full_name} (@{message.from_user.username}) просит помощи!")
     safe_send_message(message.chat.id, "✅ Запрос отправлен администратору.")
 
-# ====== КОМАНДА ЭКСПОРТА В EXCEL ======
-@bot.message_handler(commands=['export'])
-def export_to_excel(message):
-    if message.from_user.id != ADMIN_ID:
-        return
+# ====== ФУНКЦИЯ ЭКСПОРТА В EXCEL ======
+def send_export(chat_id):
     try:
         records = get_all_records()
         if not records:
-            safe_send_message(message.chat.id, "Нет данных для экспорта.")
+            safe_send_message(chat_id, "Нет данных для экспорта.")
             return
 
-        # Создаём Excel-файл в памяти
         output = BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         worksheet = workbook.add_worksheet('Клиенты')
 
-        # Заголовки
         headers = ['ID', 'Username', 'Имя', 'Телефон', 'Приз', 'Дата выигрыша', 'Использовано']
         for col, h in enumerate(headers):
             worksheet.write(0, col, h)
 
-        # Данные
         for row_idx, r in enumerate(records, start=1):
             worksheet.write(row_idx, 0, int(r['telegram_id']))
             worksheet.write(row_idx, 1, r['username'])
@@ -383,15 +387,21 @@ def export_to_excel(message):
         workbook.close()
         output.seek(0)
 
-        # Отправляем файл
         bot.send_document(
-            message.chat.id,
+            chat_id,
             output,
             visible_file_name='clients_data.xlsx',
             caption='📊 Экспорт данных клиентов'
         )
     except Exception as e:
-        safe_send_message(message.chat.id, f"❌ Ошибка при создании Excel: {e}")
+        safe_send_message(chat_id, f"❌ Ошибка при создании Excel: {e}")
+
+# ====== КОМАНДА ЭКСПОРТА ======
+@bot.message_handler(commands=['export'])
+def export_to_excel(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    send_export(message.chat.id)
 
 # ====== ТЕСТОВАЯ КОМАНДА ДЛЯ CSV ======
 @bot.message_handler(commands=['testcsv'])
