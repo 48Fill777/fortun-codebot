@@ -9,6 +9,19 @@ import time
 import re
 from telebot.apihelper import ApiTelegramException  # <-- ДОБАВЛЕНО
 
+@bot.message_handler(commands=['testexcel'])
+def test_excel(message):
+    try:
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws['A1'] = 'Привет мир'
+        ws['A2'] = 'Клиент: Тест Тестов'
+        wb.save('test.xlsx')
+        bot.reply_to(message, "Файл test.xlsx создан")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка: {e}")
+        
 # ====== СЕКРЕТНЫЕ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ======
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
@@ -363,3 +376,4 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"⚠️ Ошибка: {e}, перезапуск через 5 сек...")
             time.sleep(5)
+
