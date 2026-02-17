@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 import time
 import re
+from telebot.apihelper import ApiTelegramException  # <-- ДОБАВЛЕНО
 
 # ====== СЕКРЕТНЫЕ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ======
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -29,7 +30,22 @@ WEB_APP_URL = "https://48fill777.github.io/wheel-of-fortune/"
 # ======================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
-# ... весь остальной код (без изменений) ...# ... весь остальной код без изменений ...
+
+# Функция безопасной отправки сообщений (обрабатывает блокировку бота)
+def safe_send_message(chat_id, text, **kwargs):
+    try:
+        bot.send_message(chat_id, text, **kwargs)
+    except ApiTelegramException as e:
+        if e.error_code == 403:
+            # Пользователь заблокировал бота — просто игнорируем
+            print(f"⚠️ Пользователь {chat_id} заблокировал бота, сообщение не отправлено")
+        else:
+            # Другие ошибки API (например, слишком много запросов) — логируем и не прерываем работу
+            print(f"⚠️ Ошибка Telegram API при отправке {chat_id}: {e}")
+    except Exception as e:
+        # Непредвиденная ошибка — пробрасываем дальше, чтобы внешний цикл перезапустил бота
+        print(f"❌ Критическая ошибка при отправке {chat_id}: {e}")
+        raise
 
 # Сбрасываем вебхук (важно для polling)
 bot.remove_webhook()
@@ -112,7 +128,7 @@ def start(message):
     markup_reply.add(web_app_button)
 
     # Приветственное сообщение
-    bot.send_message(
+    safe_send_message(
         message.chat.id,
         f"🌟 Добро пожаловать в Студию красоты “KİVİ”! 🌟\n\n"
         f"Мы дарим подарки каждому новому клиенту!\n"
@@ -136,7 +152,7 @@ def start(message):
     btn_prize = types.InlineKeyboardButton('🎁 Мой выигрыш', callback_data='my_prize')
     markup_inline.add(btn_contacts, btn_booking, btn_prize)
 
-    bot.send_message(
+    safe_send_message(
         message.chat.id,
         "Наши контакты и запись:",
         reply_markup=markup_inline
@@ -153,20 +169,20 @@ def handle_web_app_data(message):
         full_name = message.from_user.full_name
 
         if has_user_spun(user_id):
-            bot.send_message(message.chat.id, "❌ Вы уже участвовали.")
+            safe_send_message(message.chat.id, "❌ Вы уже участвовали.")
             return
 
         if add_spin_record(user_id, username, full_name, prize_name):
-            bot.send_message(ADMIN_ID, f"🎉 Новый выигрыш: {prize_name} от {full_name} (@{username})")
+            safe_send_message(ADMIN_ID, f"🎉 Новый выигрыш: {prize_name} от {full_name} (@{username})")
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton('📱 Оставить номер', callback_data='enter_phone'))
-            bot.send_message(
+            safe_send_message(
                 message.chat.id,
                 f"🎉 Вы выиграли: {prize_name}!\n\nНажмите кнопку, чтобы оставить номер.",
                 reply_markup=markup
             )
         else:
-            bot.send_message(message.chat.id, "❌ Ошибка сохранения.")
+            safe_send_message(message.chat.id, "❌ Ошибка сохранения.")
     except Exception as e:
         print(f"[ERROR] {e}")
 
@@ -174,7 +190,7 @@ def handle_web_app_data(message):
 def phone_request(call):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add(types.KeyboardButton('📱 Отправить номер', request_contact=True))
-    bot.send_message(call.message.chat.id, "📱 Отправьте номер телефона:", reply_markup=markup)
+    safe_send_message(call.message.chat.id, "📱 Отправьте номер телефона:", reply_markup=markup)
     bot.answer_callback_query(call.id)
 
 @bot.message_handler(content_types=['contact'])
@@ -184,14 +200,14 @@ def handle_contact(message):
     if update_phone(message.from_user.id, formatted):
         _, record = get_user_record(message.from_user.id)
         prize = record[4] if record else "приз"
-        bot.send_message(ADMIN_ID, f"📞 Получен номер: {formatted} (приз: {prize})")
-        bot.send_message(
+        safe_send_message(ADMIN_ID, f"📞 Получен номер: {formatted} (приз: {prize})")
+        safe_send_message(
             message.chat.id,
             f"✅ Спасибо! Ваш номер {formatted} сохранён. Администратор свяжется с вами.",
             reply_markup=types.ReplyKeyboardRemove()
         )
     else:
-        bot.send_message(message.chat.id, "❌ Ошибка. Начните заново /start")
+        safe_send_message(message.chat.id, "❌ Ошибка. Начните заново /start")
 
 @bot.message_handler(func=lambda m: m.text and m.text[0].isdigit())
 def manual_phone(message):
@@ -201,12 +217,12 @@ def manual_phone(message):
         if update_phone(message.from_user.id, formatted):
             _, record = get_user_record(message.from_user.id)
             prize = record[4] if record else "приз"
-            bot.send_message(ADMIN_ID, f"📞 Получен номер (вручную): {formatted} (приз: {prize})")
-            bot.send_message(message.chat.id, f"✅ Спасибо! Номер {formatted} сохранён.")
+            safe_send_message(ADMIN_ID, f"📞 Получен номер (вручную): {formatted} (приз: {prize})")
+            safe_send_message(message.chat.id, f"✅ Спасибо! Номер {formatted} сохранён.")
         else:
-            bot.send_message(message.chat.id, "❌ Сначала нужно выиграть приз. /start")
+            safe_send_message(message.chat.id, "❌ Сначала нужно выиграть приз. /start")
     else:
-        bot.send_message(message.chat.id, "❌ Неверный формат. Пример: +79991234567")
+        safe_send_message(message.chat.id, "❌ Неверный формат. Пример: +79991234567")
 
 @bot.message_handler(commands=['my_prize'])
 def my_prize_command(message):
@@ -215,12 +231,12 @@ def my_prize_command(message):
     print(f"[DEBUG] my_prize для {user_id}, record={record}")
     if record:
         status = "✅ Активирован" if record[6] == 1 else "⏳ Ожидает"
-        bot.send_message(
+        safe_send_message(
             message.chat.id,
             f"🎁 Ваш приз: {record[4]}\nСтатус: {status}"
         )
     else:
-        bot.send_message(message.chat.id, "❌ Вы ещё не участвовали.")
+        safe_send_message(message.chat.id, "❌ Вы ещё не участвовали.")
 
 @bot.callback_query_handler(func=lambda call: call.data == 'my_prize')
 def my_prize_callback(call):
@@ -237,8 +253,7 @@ def show_contacts(call):
 📱 Телефон: {SALON_PHONE}
 💬 Telegram: {SALON_TELEGRAM}
     """
-    # Без parse_mode, чтобы избежать ошибок форматирования
-    bot.send_message(call.message.chat.id, text)
+    safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
 # Админ-панель (команда /admin)
@@ -253,7 +268,7 @@ def admin_panel(message):
         types.InlineKeyboardButton('📞 Ожидают связи', callback_data='admin_pending'),
         types.InlineKeyboardButton('📋 Все клиенты', callback_data='admin_all')
     )
-    bot.send_message(message.chat.id, "🔧 АДМИН-ПАНЕЛЬ", reply_markup=markup)
+    safe_send_message(message.chat.id, "🔧 АДМИН-ПАНЕЛЬ", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'admin_stats')
 def admin_stats(call):
@@ -276,7 +291,7 @@ def admin_stats(call):
 📞 Оставили номер: {with_phone}
 ✅ Обслужено: {used}
     """
-    bot.send_message(call.message.chat.id, text)
+    safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'admin_no_phone')
@@ -293,7 +308,7 @@ def admin_no_phone(call):
             text += f"👤 {row[2]} (@{row[1]})\n🆔 {row[0]}\n🎁 {row[4]}\n📅 {row[5][:16]}\n\n"
     if not found:
         text = "✅ Все клиенты оставили номер."
-    bot.send_message(call.message.chat.id, text)
+    safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'admin_pending')
@@ -310,7 +325,7 @@ def admin_pending(call):
             text += f"👤 {row[2]} (@{row[1]})\n📞 {row[3]}\n🎁 {row[4]}\n📅 {row[5][:16]}\n\n"
     if not found:
         text = "✅ Нет ожидающих связи."
-    bot.send_message(call.message.chat.id, text)
+    safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'admin_all')
@@ -326,14 +341,14 @@ def admin_all(call):
         text += f"{status} {row[2]} (@{row[1]}) 📞 {phone}\n🎁 {row[4]}\n\n"
     if ws.max_row == 1:
         text = "Пока нет клиентов."
-    bot.send_message(call.message.chat.id, text)
+    safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
 # Обработчик для обращений к админу
 @bot.message_handler(commands=['call_admin'])
 def call_admin(message):
-    bot.send_message(ADMIN_ID, f"🔔 Клиент {message.from_user.full_name} (@{message.from_user.username}) просит помощи!")
-    bot.send_message(message.chat.id, "✅ Запрос отправлен администратору.")
+    safe_send_message(ADMIN_ID, f"🔔 Клиент {message.from_user.full_name} (@{message.from_user.username}) просит помощи!")
+    safe_send_message(message.chat.id, "✅ Запрос отправлен администратору.")
 
 # Запуск бота с авто-перезапуском
 if __name__ == '__main__':
