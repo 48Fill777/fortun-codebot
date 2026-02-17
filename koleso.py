@@ -9,18 +9,6 @@ import time
 import re
 from telebot.apihelper import ApiTelegramException  # <-- ДОБАВЛЕНО
 
-@bot.message_handler(commands=['testexcel'])
-def test_excel(message):
-    try:
-        from openpyxl import Workbook
-        wb = Workbook()
-        ws = wb.active
-        ws['A1'] = 'Привет мир'
-        ws['A2'] = 'Клиент: Тест Тестов'
-        wb.save('test.xlsx')
-        bot.reply_to(message, "Файл test.xlsx создан")
-    except Exception as e:
-        bot.reply_to(message, f"Ошибка: {e}")
         
 # ====== СЕКРЕТНЫЕ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ======
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -44,6 +32,19 @@ WEB_APP_URL = "https://48fill777.github.io/wheel-of-fortune/"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+@bot.message_handler(commands=['testexcel'])
+def test_excel(message):
+    try:
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws['A1'] = 'Привет мир'
+        ws['A2'] = 'Клиент: Тест Тестов'
+        wb.save('test.xlsx')
+        bot.reply_to(message, "Файл test.xlsx создан")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка: {e}")
+        
 # Функция безопасной отправки сообщений (обрабатывает блокировку бота)
 def safe_send_message(chat_id, text, **kwargs):
     try:
@@ -376,4 +377,5 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"⚠️ Ошибка: {e}, перезапуск через 5 сек...")
             time.sleep(5)
+
 
