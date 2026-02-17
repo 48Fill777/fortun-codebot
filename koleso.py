@@ -7,6 +7,8 @@ import time
 import re
 import csv
 from telebot.apihelper import ApiTelegramException
+import xlsxwriter
+from io import BytesIO
 
 # ====== СЕКРЕТНЫЕ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ======
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -30,7 +32,7 @@ WEB_APP_URL = "https://48fill777.github.io/wheel-of-fortune/"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ====== Функция безопасной отправки сообщений ======
+# Функция безопасной отправки сообщений
 def safe_send_message(chat_id, text, **kwargs):
     try:
         bot.send_message(chat_id, text, **kwargs)
@@ -43,16 +45,15 @@ def safe_send_message(chat_id, text, **kwargs):
         print(f"❌ Критическая ошибка при отправке {chat_id}: {e}")
         raise
 
-# Сбрасываем вебхук (важно для polling)
+# Сбрасываем вебхук
 bot.remove_webhook()
 time.sleep(1)
 
-# ====== РАБОТА С CSV-ФАЙЛОМ ======
+# ====== РАБОТА С CSV ======
 CSV_FILE = 'clients_data.csv'
 CSV_HEADERS = ["telegram_id", "username", "full_name", "phone", "prize", "win_date", "is_used"]
 
 def init_csv():
-    """Создаёт CSV-файл с заголовками, если его нет."""
     try:
         with open(CSV_FILE, 'x', encoding='utf-8-sig', newline='') as f:
             writer = csv.writer(f)
@@ -63,7 +64,6 @@ def init_csv():
 init_csv()
 
 def has_user_spun(telegram_id):
-    """Проверяет, участвовал ли пользователь."""
     with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -72,7 +72,6 @@ def has_user_spun(telegram_id):
     return False
 
 def add_spin_record(telegram_id, username, full_name, prize):
-    """Добавляет запись о выигрыше, если её ещё нет."""
     if has_user_spun(telegram_id):
         return False
     with open(CSV_FILE, 'a', encoding='utf-8-sig', newline='') as f:
@@ -81,7 +80,6 @@ def add_spin_record(telegram_id, username, full_name, prize):
     return True
 
 def update_phone(telegram_id, phone):
-    """Обновляет номер телефона для пользователя."""
     rows = []
     updated = False
     with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
@@ -100,22 +98,19 @@ def update_phone(telegram_id, phone):
     return updated
 
 def get_user_record(telegram_id):
-    """Возвращает (номер_строки, список) для пользователя или (None, None)."""
     with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
         reader = csv.reader(f)
-        headers = next(reader)
+        next(reader)
         for i, row in enumerate(reader, start=2):
             if row and int(row[0]) == telegram_id:
                 return i, row
     return None, None
 
 def get_all_records():
-    """Возвращает список всех записей в виде словарей."""
     with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
         reader = csv.DictReader(f)
         return list(reader)
 
-# ====== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
 def validate_phone(phone):
     phone = re.sub(r'\D', '', phone)
     return len(phone) in (10, 11)
@@ -126,18 +121,8 @@ def format_phone(phone):
         phone = phone[1:]
     return f"+7 ({phone[:3]}) {phone[3:6]}-{phone[6:8]}-{phone[8:]}"
 
-# ====== ТЕСТОВАЯ КОМАНДА ДЛЯ CSV ======
-@bot.message_handler(commands=['testcsv'])
-def test_csv(message):
-    try:
-        with open('test.csv', 'w', encoding='utf-8-sig', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Привет мир', 'Клиент: Тест Тестов'])
-        bot.reply_to(message, "✅ Файл test.csv создан")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {e}")
+# ====== ОБРАБОТЧИКИ КОМАНД ======
 
-# ====== ОСНОВНЫЕ ОБРАБОТЧИКИ ======
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
@@ -279,7 +264,7 @@ def show_contacts(call):
     safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
-# ====== АДМИН-ПАНЕЛЬ ======
+# Админ-панель
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.from_user.id != ADMIN_ID:
@@ -358,10 +343,66 @@ def admin_all(call):
     safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
 
+# Команда для обращения к админу
 @bot.message_handler(commands=['call_admin'])
 def call_admin(message):
     safe_send_message(ADMIN_ID, f"🔔 Клиент {message.from_user.full_name} (@{message.from_user.username}) просит помощи!")
     safe_send_message(message.chat.id, "✅ Запрос отправлен администратору.")
+
+# ====== КОМАНДА ЭКСПОРТА В EXCEL ======
+@bot.message_handler(commands=['export'])
+def export_to_excel(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        records = get_all_records()
+        if not records:
+            safe_send_message(message.chat.id, "Нет данных для экспорта.")
+            return
+
+        # Создаём Excel-файл в памяти
+        output = BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        worksheet = workbook.add_worksheet('Клиенты')
+
+        # Заголовки
+        headers = ['ID', 'Username', 'Имя', 'Телефон', 'Приз', 'Дата выигрыша', 'Использовано']
+        for col, h in enumerate(headers):
+            worksheet.write(0, col, h)
+
+        # Данные
+        for row_idx, r in enumerate(records, start=1):
+            worksheet.write(row_idx, 0, int(r['telegram_id']))
+            worksheet.write(row_idx, 1, r['username'])
+            worksheet.write(row_idx, 2, r['full_name'])
+            worksheet.write(row_idx, 3, r['phone'])
+            worksheet.write(row_idx, 4, r['prize'])
+            worksheet.write(row_idx, 5, r['win_date'])
+            worksheet.write(row_idx, 6, 'Да' if r['is_used'] == '1' else 'Нет')
+
+        workbook.close()
+        output.seek(0)
+
+        # Отправляем файл
+        bot.send_document(
+            message.chat.id,
+            output,
+            visible_file_name='clients_data.xlsx',
+            caption='📊 Экспорт данных клиентов'
+        )
+    except Exception as e:
+        safe_send_message(message.chat.id, f"❌ Ошибка при создании Excel: {e}")
+
+# ====== ТЕСТОВАЯ КОМАНДА ДЛЯ CSV ======
+@bot.message_handler(commands=['testcsv'])
+def test_csv(message):
+    try:
+        with open('test.csv', 'w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Привет мир', 'Клиент: Тест Тестов'])
+        bot.reply_to(message, "✅ Файл test.csv создан. Скачайте и откройте в Excel.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка: {e}")
 
 # ====== ЗАПУСК БОТА ======
 if __name__ == '__main__':
