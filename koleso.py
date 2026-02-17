@@ -1,5 +1,4 @@
 import os
-from dotenv import load_dotenv
 import telebot
 from telebot import types
 import openpyxl
@@ -9,10 +8,17 @@ import json
 import time
 import re
 
-# Загружаем переменные из .env файла
-load_dotenv()
+# ====== СЕКРЕТНЫЕ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ======
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 
-# ====== ДАННЫЕ САЛОНА (публичные) ======
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не задан в переменных окружения!")
+if not ADMIN_ID:
+    raise ValueError("ADMIN_ID не задан в переменных окружения!")
+# =====================================================
+
+# ====== ПУБЛИЧНЫЕ ДАННЫЕ САЛОНА ======
 SALON_NAME = "Студия красоты “KİVİ”"
 SALON_PHONE = "+7 (985) 699-17-77"
 SALON_ADDRESS = "м. Пятницкое шоссе, Ангелов переулок, дом 2"
@@ -20,21 +26,10 @@ SALON_HOURS = "Без выходных с 10:00 до 22:00"
 SALON_BOOKING_URL = "https://n1610700.yclients.com"
 SALON_TELEGRAM = "@kivi_mitino"
 WEB_APP_URL = "https://48fill777.github.io/wheel-of-fortune/"
-# ========================================
-
-# ====== СЕКРЕТНЫЕ ДАННЫЕ (из переменных окружения) ======
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))  # преобразуем в число, по умолчанию 0
-
-# Проверяем, что токен загружен
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не найден в переменных окружения!")
-if not ADMIN_ID:
-    raise ValueError("ADMIN_ID не найден в переменных окружения!")
-# =========================================================
+# ======================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
-# ... весь остальной код без изменений ...
+# ... весь остальной код (без изменений) ...# ... весь остальной код без изменений ...
 
 # Сбрасываем вебхук (важно для polling)
 bot.remove_webhook()
