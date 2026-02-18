@@ -28,6 +28,9 @@ SALON_HOURS = "Без выходных с 10:00 до 22:00"
 SALON_BOOKING_URL = "https://n1610700.yclients.com"
 SALON_TELEGRAM = "@kivi_mitino"
 WEB_APP_URL = "https://48fill777.github.io/wheel-of-fortune/"
+# Ссылки на документы
+RULES_URL = "https://disk.yandex.ru/i/TJ4ayDJPKidNxA"
+PRIVACY_URL = "https://dcdb62b0-570c-474e-a103-d4e125b05553.selstorage.ru/%D0%9F%D0%BE%D0%BB%D0%B8%D1%82%D0%B8%D0%BA%D0%B0%20%D0%BE%D0%B1%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%BA%D0%B8%20%D0%BF%D0%B5%D1%80%20%D0%B4%D0%B0%D0%BD%D0%BD%D1%8B%D1%85.pdf"
 # ======================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -50,8 +53,8 @@ bot.remove_webhook()
 time.sleep(1)
 
 # ====== РАБОТА С CSV-ФАЙЛОМ ======
-CSV_FILE = 'clients_data.csv'  # Если нужно хранить в /app/data, замените на '/app/data/clients_data.csv'
-CSV_HEADERS = ["telegram_id", "username", "full_name", "phone", "prize", "win_date", "is_used"]
+CSV_FILE = 'clients_data.csv'  # При необходимости измените путь (например, '/app/data/clients_data.csv')
+CSV_HEADERS = ["telegram_id", "username", "full_name", "phone", "prize", "win_date", "is_used", "agreed"]
 
 # Создаём файл с заголовками, если его нет
 def init_csv():
@@ -73,15 +76,62 @@ def has_user_spun(telegram_id):
                 return True
     return False
 
-# Добавляем запись о новом выигрыше
-def add_spin_record(telegram_id, username, full_name, prize):
-    if has_user_spun(telegram_id):
-        return False
+# Проверяем, дал ли пользователь согласие
+def has_user_agreed(telegram_id):
+    try:
+        with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row['telegram_id'] and int(row['telegram_id']) == telegram_id:
+                    return row.get('agreed') == '1'
+    except FileNotFoundError:
+        pass
+    return False
+
+# Создаёт запись о согласии (если её ещё нет)
+def create_agreement_record(telegram_id, username, full_name):
+    if has_user_agreed(telegram_id):
+        return True
     with open(CSV_FILE, 'a', encoding='utf-8-sig', newline='') as f:
         writer = csv.writer(f)
-        # Пишем 0 в is_used (ещё не обслужен)
-        writer.writerow([telegram_id, username, full_name, "", prize, datetime.now().isoformat(), 0])
+        writer.writerow([telegram_id, username, full_name, "", "", "", 0, 1])
     return True
+
+# Обновляет запись после выигрыша (добавляет приз и дату)
+def add_spin_record(telegram_id, username, full_name, prize):
+    # Проверяем, не крутил ли уже
+    if has_user_spun(telegram_id):
+        return False
+
+    rows = []
+    updated = False
+    with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
+        reader = csv.reader(f)
+        headers = next(reader)
+        for row in reader:
+            if row and int(row[0]) == telegram_id:
+                # Это запись о согласии – обновляем, добавляя приз
+                while len(row) < 8:
+                    row.append('')
+                row[4] = prize
+                row[5] = datetime.now().isoformat()
+                # row[7] (agreed) уже должен быть 1, но на всякий случай
+                row[7] = '1'
+                updated = True
+            rows.append(row)
+
+    if updated:
+        with open(CSV_FILE, 'w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(rows)
+        return True
+    else:
+        # Если записи о согласии не было (маловероятно) – создаём новую
+        with open(CSV_FILE, 'a', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([telegram_id, username, full_name, "", prize, datetime.now().isoformat(), 0, 1])
+        return True
 
 # Обновляем номер телефона пользователя
 def update_phone(telegram_id, phone):
@@ -92,7 +142,9 @@ def update_phone(telegram_id, phone):
         headers = next(reader)
         for row in reader:
             if row and int(row[0]) == telegram_id:
-                row[3] = phone  # обновляем телефон
+                while len(row) < 8:
+                    row.append('')
+                row[3] = phone
                 updated = True
             rows.append(row)
     if updated:
@@ -102,7 +154,7 @@ def update_phone(telegram_id, phone):
             writer.writerows(rows)
     return updated
 
-# Получаем запись пользователя по его ID
+# Получаем запись пользователя по его ID (возвращает номер строки и список)
 def get_user_record(telegram_id):
     try:
         with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
@@ -113,21 +165,29 @@ def get_user_record(telegram_id):
                     continue
                 try:
                     if int(row[0]) == telegram_id:
+                        # Дополняем строку до 8 элементов, если нужно
+                        while len(row) < 8:
+                            row.append('')
                         return i, row
                 except (ValueError, IndexError):
                     continue
     except FileNotFoundError:
-        return None, None
+        pass
     except Exception as e:
         print(f"[ERROR] в get_user_record: {e}")
-        return None, None
     return None, None
 
 # Получаем все записи из CSV (для админки и экспорта)
 def get_all_records():
     with open(CSV_FILE, 'r', encoding='utf-8-sig', newline='') as f:
         reader = csv.DictReader(f)
-        return list(reader)
+        records = list(reader)
+        # Дополняем каждую запись недостающими ключами (на случай старого файла)
+        for r in records:
+            for h in CSV_HEADERS:
+                if h not in r:
+                    r[h] = ''
+        return records
 
 # Проверка формата телефона
 def validate_phone(phone):
@@ -138,21 +198,44 @@ def validate_phone(phone):
 def format_phone(phone):
     phone = re.sub(r'\D', '', phone)
     if len(phone) == 11:
-        phone = phone[1:]  # убираем первую цифру (8 или 7)
+        phone = phone[1:]
     return f"+7 ({phone[:3]}) {phone[3:6]}-{phone[6:8]}-{phone[8:]}"
 
 # ====== ОБРАБОТЧИКИ КОМАНД ======
 
-# Команда /start
+# Команда /start (теперь с проверкой согласия)
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
-    spun = has_user_spun(user_id)
-    # Если уже крутил, добавляем параметр already_spun=1, чтобы колесо показало сообщение
-    url = WEB_APP_URL + ("?already_spun=1" if spun else "")
-    print(f"[DEBUG] /start для {user_id}, spun={spun}")
+    username = message.from_user.username or ""
+    full_name = message.from_user.full_name
 
-    # Кнопка для открытия колеса
+    # Если пользователь ещё не дал согласие
+    if not has_user_agreed(user_id):
+        text = (
+            f"🌟 Добро пожаловать в Студию красоты “KİVİ”! 🌟\n\n"
+            f"Перед участием обязательно ознакомьтесь с [правилами акции]({RULES_URL}) "
+            f"и [Политикой обработки персональных данных]({PRIVACY_URL}).\n\n"
+            f"После ознакомления нажмите кнопку ниже, чтобы подтвердить согласие и получить доступ к колесу фортуны."
+        )
+        markup = types.InlineKeyboardMarkup()
+        agree_button = types.InlineKeyboardButton('✅ Ознакомлен и согласен', callback_data='agree')
+        markup.add(agree_button)
+        safe_send_message(
+            message.chat.id,
+            text,
+            reply_markup=markup,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        return
+
+    # Если согласие уже есть – показываем полное приветствие с кнопкой колеса
+    spun = has_user_spun(user_id)
+    url = WEB_APP_URL + ("?already_spun=1" if spun else "")
+    print(f"[DEBUG] /start для {user_id}, spun={spun}, agreed=True")
+
+    # Reply-кнопка для открытия колеса
     markup_reply = types.ReplyKeyboardMarkup(resize_keyboard=True)
     web_app_button = types.KeyboardButton(
         text="🎡 Крутить колесо!",
@@ -160,7 +243,7 @@ def start(message):
     )
     markup_reply.add(web_app_button)
 
-    # Приветственное сообщение
+    # Полное приветствие
     safe_send_message(
         message.chat.id,
         f"🌟 Добро пожаловать в Студию красоты “KİVİ”! 🌟\n\n"
@@ -174,11 +257,14 @@ def start(message):
         f"👑 Депозит 10 000 руб.\n\n"
         f"🎯 Для активации подарка потребуется номер телефона.\n"
         f"Обратите внимание: участвовать можно только один раз!\n"
-        f"Подарок действителен в течение 30 дней.",
-        reply_markup=markup_reply
+        f"Подарок действителен в течение 30 дней.\n\n"
+        f"Нажимая кнопку ниже, вы подтверждаете, что ознакомились с [правилами акции]({RULES_URL}) и [политикой обработки данных]({PRIVACY_URL}).",
+        reply_markup=markup_reply,
+        parse_mode='Markdown',
+        disable_web_page_preview=True
     )
 
-    # Инлайн-кнопки (контакты, запись, мой выигрыш)
+    # Inline-кнопки (контакты, запись, мой выигрыш)
     markup_inline = types.InlineKeyboardMarkup(row_width=2)
     btn_contacts = types.InlineKeyboardButton('📞 Контакты', callback_data='contacts')
     btn_booking = types.InlineKeyboardButton('📅 Записаться онлайн', url=SALON_BOOKING_URL)
@@ -191,6 +277,20 @@ def start(message):
         reply_markup=markup_inline
     )
 
+# Обработчик кнопки "Ознакомлен и согласен"
+@bot.callback_query_handler(func=lambda call: call.data == 'agree')
+def agree_callback(call):
+    user_id = call.from_user.id
+    username = call.from_user.username or ""
+    full_name = call.from_user.full_name
+
+    if create_agreement_record(user_id, username, full_name):
+        bot.answer_callback_query(call.id, "✅ Спасибо! Теперь вы можете крутить колесо.", show_alert=False)
+        # Перенаправляем на /start, чтобы показать полное меню
+        start(call.message)
+    else:
+        bot.answer_callback_query(call.id, "❌ Ошибка. Попробуйте позже.", show_alert=True)
+
 # Обработка данных из веб-приложения (колесо)
 @bot.message_handler(content_types=['web_app_data'])
 def handle_web_app_data(message):
@@ -201,6 +301,11 @@ def handle_web_app_data(message):
         user_id = message.from_user.id
         username = message.from_user.username or ""
         full_name = message.from_user.full_name
+
+        # Проверяем согласие (на всякий случай)
+        if not has_user_agreed(user_id):
+            safe_send_message(message.chat.id, "❌ Сначала нужно принять условия в /start")
+            return
 
         if has_user_spun(user_id):
             safe_send_message(message.chat.id, "❌ Вы уже участвовали.")
@@ -266,14 +371,11 @@ def manual_phone(message):
 def my_prize_command(message):
     user_id = message.from_user.id
     print(f"[DEBUG] my_prize для {user_id}")
-    
-    # Получаем запись пользователя
+
     row_num, record = get_user_record(user_id)
     print(f"[DEBUG] row_num={row_num}, record={record}")
-    
+
     if record:
-        # Определяем статус приза
-        # record[4] - название приза, record[6] - is_used (0 или 1)
         status = "✅ Активирован" if record[6] == '1' else "⏳ Ожидает"
         safe_send_message(
             message.chat.id,
@@ -313,7 +415,7 @@ def admin_panel(message):
         types.InlineKeyboardButton('⏳ Ожидают номера', callback_data='admin_no_phone'),
         types.InlineKeyboardButton('📞 Ожидают связи', callback_data='admin_pending'),
         types.InlineKeyboardButton('📋 Все клиенты', callback_data='admin_all'),
-        types.InlineKeyboardButton('📥 Экспорт в Excel', callback_data='admin_export')  # новая кнопка
+        types.InlineKeyboardButton('📥 Экспорт в Excel', callback_data='admin_export')
     )
     safe_send_message(message.chat.id, "🔧 АДМИН-ПАНЕЛЬ", reply_markup=markup)
 
@@ -326,12 +428,14 @@ def admin_stats(call):
     total = len(records)
     with_phone = sum(1 for r in records if r['phone'])
     used = sum(1 for r in records if r['is_used'] == '1')
+    agreed = sum(1 for r in records if r.get('agreed') == '1')
     text = f"""
 📊 СТАТИСТИКА
 
 👥 Всего участников: {total}
 📞 Оставили номер: {with_phone}
 ✅ Обслужено: {used}
+👍 Дали согласие: {agreed}
     """
     safe_send_message(call.message.chat.id, text)
     bot.answer_callback_query(call.id)
@@ -380,7 +484,8 @@ def admin_all(call):
     for r in records:
         phone = r['phone'] if r['phone'] else "не указан"
         status = "✅" if r['is_used'] == '1' else "⏳"
-        text += f"{status} {r['full_name']} (@{r['username']}) 📞 {phone}\n🎁 {r['prize']}\n\n"
+        agreed = "✅" if r.get('agreed') == '1' else "❌"
+        text += f"{status} {r['full_name']} (@{r['username']}) 📞 {phone}\n🎁 {r['prize']} | Согласие: {agreed}\n\n"
     if not records:
         text = "Пока нет клиентов."
     safe_send_message(call.message.chat.id, text)
@@ -392,7 +497,7 @@ def admin_export_callback(call):
     if call.from_user.id != ADMIN_ID:
         bot.answer_callback_query(call.id, "❌ У вас нет прав администратора", show_alert=True)
         return
-    bot.answer_callback_query(call.id)  # закрываем "часики"
+    bot.answer_callback_query(call.id)
     send_export(call.message.chat.id)
 
 # Команда для обращения к админу
@@ -409,30 +514,28 @@ def send_export(chat_id):
             safe_send_message(chat_id, "Нет данных для экспорта.")
             return
 
-        # Создаём Excel-файл в памяти
         output = BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         worksheet = workbook.add_worksheet('Клиенты')
 
-        # Заголовки
-        headers = ['ID', 'Username', 'Имя', 'Телефон', 'Приз', 'Дата выигрыша', 'Использовано']
+        # Заголовки с учётом нового столбца
+        headers = ['ID', 'Username', 'Имя', 'Телефон', 'Приз', 'Дата выигрыша', 'Использовано', 'Согласие']
         for col, h in enumerate(headers):
             worksheet.write(0, col, h)
 
-        # Данные
         for row_idx, r in enumerate(records, start=1):
-            worksheet.write(row_idx, 0, int(r['telegram_id']))
+            worksheet.write(row_idx, 0, int(r['telegram_id']) if r['telegram_id'] else '')
             worksheet.write(row_idx, 1, r['username'])
             worksheet.write(row_idx, 2, r['full_name'])
             worksheet.write(row_idx, 3, r['phone'])
             worksheet.write(row_idx, 4, r['prize'])
             worksheet.write(row_idx, 5, r['win_date'])
             worksheet.write(row_idx, 6, 'Да' if r['is_used'] == '1' else 'Нет')
+            worksheet.write(row_idx, 7, 'Да' if r.get('agreed') == '1' else 'Нет')
 
         workbook.close()
         output.seek(0)
 
-        # Отправляем файл
         bot.send_document(
             chat_id,
             output,
@@ -468,7 +571,6 @@ def debug_csv(message):
     try:
         with open(CSV_FILE, 'r', encoding='utf-8-sig') as f:
             content = f.read()
-        # Отправляем первые 1500 символов (чтобы не превысить лимит)
         if len(content) > 1500:
             content = content[:1500] + "\n... (обрезано)"
         safe_send_message(message.chat.id, f"```\n{content}\n```", parse_mode='Markdown')
